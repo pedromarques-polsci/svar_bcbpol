@@ -35,6 +35,9 @@ dataset <- readRDS("final_data/dataset.rds") %>%
          lag_d_cmd_idx = dplyr::lag(d_cmd_idx),
          election = if_else(
            lubridate::year(date) %in% c(seq(2002, 2018, by = 4)),
+           1, 0),
+         subprime_crisis = if_else(
+           lubridate::year(date) %in% c(2007, 2008),
            1, 0)) %>%
   filter(date > "1999-05-01", date < "2020-01-01")
 
@@ -79,23 +82,171 @@ results_df <- data.frame(
 rownames(results_df) <- NULL
 
 # VECTOR AUTOREGRESSION --------------------------------------------------
-VARselect(dataset %>% dplyr::select(ipca, exchange_growth, deficit_growth,
-          d_meta_selic),
-          exogen =
-            dataset %>% dplyr::select(d_fed_pol, d_cmd_idx,
-                                      lag_d_fed_pol, lag_d_cmd_idx),
+# Endogenous VAR
+VARselect(dataset %>% dplyr::select(ipca, exchange_growth,
+                                    d_meta_selic, d_debt_gdp),
           type = "const")
 
-VAR(y = dataset %>% dplyr::select(ipca, exchange_growth,
-                           d_meta_selic),
+var1 <- VAR(y = dataset %>% dplyr::select(ipca, exchange_growth,
+                                  d_meta_selic, d_debt_gdp),
     type = "const",
-    exogen = dataset %>% dplyr::select(d_fed_pol, d_cmd_idx,
-                                       lag_d_fed_pol, lag_d_cmd_idx),
-    p = 1) %>% summary()
+    p = 1)
 
-VAR(y = dataset %>% dplyr::select(ipca, exchange_growth,
-                                  d_meta_selic),
+var1 %>% summary()
+
+plot(irf(var1, n.ahead = 10, impulse = "d_meta_selic",
+         response = "ipca", ci = 0.90))
+
+plot(irf(var1, n.ahead = 12, impulse = "exchange_growth",
+         response = "ipca", ci = 0.95))
+
+plot(irf(var1, n.ahead = 12, impulse = "d_debt_gdp",
+         response = "d_meta_selic", ci = 0.95))
+
+# XVAR - Commodity Prices and Terms of Trade
+varx1 <- VAR(y = dataset %>% dplyr::select(ipca, exchange_growth,
+                                  d_meta_selic, d_debt_gdp),
+    exogen = dataset %>% dplyr::select(d_cmd_idx),
     type = "const",
-    exogen = dataset %>% dplyr::select(d_fed_pol, d_cmd_tot_idx,
-                                       lag_d_fed_pol),
-    p = 1) %>% summary()
+    p = 1)
+
+varx1 %>% summary()
+
+plot(irf(varx1, n.ahead = 12, impulse = "exchange_growth",
+         response = "ipca", ci = 0.95))
+
+plot(irf(varx1, n.ahead = 12, impulse = "d_meta_selic",
+         response = "ipca", ci = 0.90))
+
+varx2 <- VAR(y = dataset %>% dplyr::select(ipca, exchange_growth,
+                                  d_meta_selic, d_debt_gdp),
+    exogen = dataset %>% dplyr::select(d_cmd_tot_idx),
+    type = "const",
+    p = 1)
+
+varx2 %>% summary()
+
+# STRUCTURAL VAR ----------------------------------------------------------
+amat <- diag(3)
+amat[2,1] <- NA
+amat[3,1] <- NA
+amat[3,2] <- NA
+
+## Terms of Trade -> Exchange Rates -> Inflation --------------------------
+sdata1 <- dataset %>% dplyr::select(d_cmd_tot_idx, exchange_growth, ipca)
+
+VARselect(sdata1, type="both")
+std_var1 <- VAR(sdata1, exogen =
+                  cbind(subprime_crisis = dataset$subprime_crisis,
+                        fed_pol = dataset$fed_pol), p = 1)
+
+svar1 <- SVAR(std_var1, Amat = amat, Bmat = NULL,
+              estmethod = c("scoring", "direct"))
+
+svar1
+
+plot(irf(svar1, n.ahead = 10, impulse = "d_cmd_tot_idx",
+         response = "d_cmd_tot_idx", ci = 0.95))
+
+plot(irf(svar1, n.ahead = 10, impulse = "d_cmd_tot_idx",
+         response = "exchange_growth", ci = 0.95))
+
+plot(irf(svar1, n.ahead = 10, impulse = "d_cmd_tot_idx",
+         response = "exchange_growth", ci = 0.95))
+
+plot(irf(svar1, n.ahead = 10, impulse = "exchange_growth",
+         response = "ipca", ci = 0.95))
+
+## Fed Policy -> SELIC -> Inflation -----------------------------------
+sdata2 <- dataset %>% dplyr::select(d_fed_pol, d_meta_selic, ipca)
+
+VARselect(sdata2, type="both",
+          exogen =
+            cbind(subprime_crisis = dataset$subprime_crisis,
+                  d_cmd_tot_idx = dataset$d_cmd_tot_idx))
+
+std_var2 <- VAR(sdata2,
+                exogen = cbind(subprime_crisis = dataset$subprime_crisis,
+                        dataset$d_cmd_tot_idx),
+                p = 2)
+
+svar2 <- SVAR(std_var2, Amat = amat, Bmat = NULL,
+              estmethod = c("scoring", "direct"))
+
+svar2
+
+plot(irf(svar2, n.ahead = 10, impulse = "d_fed_pol",
+         response = "d_fed_pol", ci = 0.95))
+
+plot(irf(svar2, n.ahead = 10, impulse = "d_fed_pol",
+         response = "d_meta_selic", ci = 0.95))
+
+plot(irf(svar2, n.ahead = 10, impulse = "d_meta_selic",
+         response = "ipca", ci = 0.95))
+
+## SELIC -> Debt -> Inflation -----------------------------------
+sdata3 <- dataset %>% dplyr::select(d_meta_selic, d_debt_gdp, ipca)
+
+VARselect(sdata3, type="both",
+          exogen =
+            cbind(subprime_crisis = dataset$subprime_crisis,
+                  d_cmd_tot_idx = dataset$d_cmd_tot_idx))
+
+std_var3 <- VAR(sdata3,
+                exogen = cbind(subprime_crisis = dataset$subprime_crisis,
+                               dataset$d_cmd_tot_idx),
+                p = 1)
+
+svar3 <- SVAR(std_var3, Amat = amat, Bmat = NULL,
+              estmethod = c("scoring", "direct"))
+
+svar3
+
+plot(irf(svar3, n.ahead = 10, impulse = "d_meta_selic",
+         response = "d_meta_selic", ci = 0.95))
+
+plot(irf(svar3, n.ahead = 10, impulse = "d_meta_selic",
+         response = "d_debt_gdp", ci = 0.95))
+
+plot(irf(svar3, n.ahead = 10, impulse = "d_debt_gdp",
+         response = "ipca", ci = 0.95))
+
+## Terms of Trade -> ... -> SELIC -----------------------------------------
+amat4 <- diag(4)
+amat4[2,1] <- NA
+amat4[3,1] <- NA
+amat4[3,2] <- NA
+amat4[4,1] <- NA
+amat4[4,2] <- NA
+amat4[4,3] <- NA
+
+sdata4 <- dataset %>% dplyr::select(d_cmd_tot_idx, exchange_growth,
+                                    ipca, d_meta_selic)
+
+VARselect(sdata4, type="both",
+          exogen =
+            cbind(subprime_crisis = dataset$subprime_crisis,
+                  d_fed_pol = dataset$d_fed_pol))
+
+std_var4 <- VAR(sdata4,
+                exogen =
+                  cbind(subprime_crisis = dataset$subprime_crisis,
+                        d_fed_pol = dataset$d_fed_pol),
+                p = 1)
+
+svar4 <- SVAR(std_var4, Amat = amat4, Bmat = NULL,
+              estmethod = c("scoring", "direct"))
+
+svar4
+
+plot(irf(svar4, n.ahead = 10, impulse = "d_cmd_tot_idx",
+         response = "d_cmd_tot_idx", ci = 0.95))
+
+plot(irf(svar4, n.ahead = 10, impulse = "d_cmd_tot_idx",
+         response = "exchange_growth", ci = 0.95))
+
+plot(irf(svar4, n.ahead = 10, impulse = "exchange_growth",
+         response = "ipca", ci = 0.95))
+
+plot(irf(svar4, n.ahead = 10, impulse = "ipca",
+         response = "d_meta_selic", ci = 0.95))
