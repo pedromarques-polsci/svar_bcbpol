@@ -31,8 +31,7 @@ dataset <- readRDS("final_data/dataset.rds") %>%
          d_debt_gdp = debt_gdp - dplyr::lag(debt_gdp),
          d_cmd_tot_idx = cmd_tot_idx - dplyr::lag(cmd_tot_idx),
          d_cmd_idx = cmd_idx - dplyr::lag(cmd_idx),
-         lag_d_fed_pol = dplyr::lag(d_fed_pol),
-         lag_d_cmd_idx = dplyr::lag(d_cmd_idx),
+         d_gs10 = gs10 - dplyr::lag(gs10),
          election = if_else(
            lubridate::year(date) %in% c(seq(2002, 2018, by = 4)),
            1, 0),
